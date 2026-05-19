@@ -1,0 +1,1 @@
+# SGGW_Wdrazanie_rozwiazan_AI
