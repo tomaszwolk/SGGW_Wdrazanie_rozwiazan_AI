@@ -11,6 +11,7 @@ class Settings(BaseSettings):
         env_file=env_file, env_file_encoding="utf-8", extra="ignore"
     )
     OPENROUTER_API_KEY: str
+    OPENROUTER_API_URL: str
     VLM_MODEL_NAME: str
     LLM_MODEL_NAME: str
     QDRANT_HOST: str
