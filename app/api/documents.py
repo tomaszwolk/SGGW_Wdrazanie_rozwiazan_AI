@@ -5,15 +5,34 @@ from pathlib import Path
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    HTTPException,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse
+from loguru import logger
 from sqlmodel import Session
 
 from app.core.config import get_settings
 from app.db.sqlite import get_document, get_session
 from app.models.domain import Document, DocumentStatus
-from app.models.schemas import DocumentDetailResponse, StructuredData, UploadResponse
+from app.models.schemas import (
+    DocumentDetailResponse,
+    IndexResponse,
+    StructuredData,
+    UploadResponse,
+)
 from app.services.background_tasks import process_document_vlm
+from app.services.rag_service import (
+    DocumentNotCompletedError,
+    DocumentNotFoundError,
+    index_document,
+)
 from app.utils.upload_validation import validate_upload_file
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -80,7 +99,7 @@ async def get_document_detail(
 
     structured_data = None
     raw_text = None
-    if document.status == DocumentStatus.COMPLETED:
+    if document.status == DocumentStatus.COMPLETED and document.structured_data:
         structured_data = StructuredData.model_validate_json(document.structured_data)
         raw_text = document.raw_text
 
@@ -92,5 +111,43 @@ async def get_document_detail(
             raw_text=raw_text,
             structured_data=structured_data,
             error_message=document.error_message,
+        ).model_dump(),
+    )
+
+
+@router.post("/{document_id}/index", response_model=IndexResponse)
+async def index_document_rag(document_id: UUID, request: Request) -> JSONResponse:
+    doc_id = str(document_id)
+    try:
+        chunks_indexed = index_document(
+            document_id=doc_id,
+            embedder=request.app.state.embedder,
+            qdrant_client=request.app.state.qdrant_client,
+        )
+    except DocumentNotFoundError:
+        raise HTTPException(status_code=404, detail="Document not found") from None
+    except DocumentNotCompletedError:
+        raise HTTPException(
+            status_code=409,
+            detail="Document is not completed and cannot be indexed",
+        ) from None
+    except Exception:  # noqa: BLE001
+        logger.exception("Indexing failed for document {}", doc_id)
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to index document (embedding or Qdrant error)",
+        ) from None
+
+    message = (
+        "No chunks to index"
+        if chunks_indexed == 0
+        else "Document was indexed successfully."
+    )
+    return JSONResponse(
+        status_code=200,
+        content=IndexResponse(
+            document_id=doc_id,
+            message=message,
+            chunks_indexed=chunks_indexed,
         ).model_dump(),
     )

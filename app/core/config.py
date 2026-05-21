@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+from uuid import UUID, uuid5
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -21,6 +22,9 @@ class Settings(BaseSettings):
     SQLITE_PATH: str
     UPLOAD_DIR: str
     CHUNK_MAX_TOKENS: int
+    APP_NAMESPACE: UUID = uuid5(
+        UUID("00000000-0000-0000-0000-000000000000"), "ai-rag-app"
+    )
 
 
 @lru_cache

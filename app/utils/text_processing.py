@@ -17,7 +17,7 @@ SUMMARY_PREFIX = "Section: Summary."
 @dataclass
 class ChunkSpec:
     section_type: str  # header | items | summary
-    source_text: str
+    source_text: str  # złożony tekst (Key-Value), który posłużył do wygenerowania wektora. Zwracany do LLMa jako kontekst.
     payload: dict[str, object]  # pole metadanych do payloadu Qdrant
 
 

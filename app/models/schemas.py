@@ -1,4 +1,3 @@
-# TODO
 from pydantic import BaseModel
 
 from app.models.domain import DocumentStatus
@@ -47,3 +46,32 @@ class DocumentDetailResponse(BaseModel):
     raw_text: str | None = None
     structured_data: StructuredData | None = None
     error_message: str | None = None
+
+
+class IndexResponse(BaseModel):
+    document_id: str
+    message: str
+    chunks_indexed: int
+
+
+class SearchRequest(BaseModel):
+    query: str
+    top_k: int = 3
+
+
+class SearchResultMetadata(BaseModel):
+    filename: str | None = None
+    date: str | None = None
+
+
+class SearchResultItem(BaseModel):
+    document_id: str
+    score: float
+    section_type: str
+    source_text: str
+    metadata: SearchResultMetadata
+
+
+class SearchResponse(BaseModel):
+    query: str
+    results: list[SearchResultItem]

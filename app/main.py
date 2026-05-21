@@ -4,8 +4,10 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from sentence_transformers import SentenceTransformer
 
 from app.api.documents import router as documents_router
+from app.api.rag import router as rag_router
 from app.core.config import get_settings
 from app.db.qdrant import ensure_collection, get_qdrant_client, health_check_qdrant
 from app.db.sqlite import check_sqlite, init_db
@@ -20,6 +22,7 @@ async def lifespan(app: FastAPI):
     Path(settings.UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
     init_db()
+    app.state.embedder = SentenceTransformer(settings.EMBEDDING_MODEL_NAME)
     app.state.qdrant_client = get_qdrant_client()
     ensure_collection(app.state.qdrant_client)
     yield
@@ -28,6 +31,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 
 app.include_router(documents_router)
+app.include_router(rag_router)
 
 
 @app.get("/health", response_model=HealthResponse)  # TODO przenieść do api/health.py
