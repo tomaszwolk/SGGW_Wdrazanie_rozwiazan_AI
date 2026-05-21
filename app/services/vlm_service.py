@@ -1,7 +1,7 @@
 import base64
 from pathlib import Path
 
-from openai import APIConnectionError, APIStatusError, OpenAI, RateLimitError
+from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 from openai.types.chat import ChatCompletionMessageParam
 from tenacity import (
     retry,
@@ -28,7 +28,6 @@ Rules:
 - Output valid JSON only. No markdown, no code fences, no commentary.
 - If a field is missing or illegible, use null (not empty string) for optional fields.
 - For numbers, use JSON numbers (float), not strings with currency symbols.
-- "structured_data.filename": if the filename is not visible on the image, use "unknown".
 - "structured_data.items": array of line items; empty array [] if no line items visible; null only if the entire items section cannot be determined.
 - Each item may include: item_name, quantity, unit_price, total_price (all optional per item except use null when unknown).
 - Detect currency when possible (e.g. PLN, EUR) and set structured_data.currency; otherwise null.
@@ -51,7 +50,9 @@ MIME_BY_SUFFIX = {
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=1, min=4, max=15),
-    retry=retry_if_exception_type((APIConnectionError, APIStatusError, RateLimitError)),
+    retry=retry_if_exception_type(
+        (APIConnectionError, APITimeoutError, RateLimitError)
+    ),
 )
 def extract_structured_data(upload_path: Path, suffix: str) -> VlmExtractionResult:
     mime = MIME_BY_SUFFIX.get(suffix)
@@ -87,7 +88,7 @@ def extract_structured_data(upload_path: Path, suffix: str) -> VlmExtractionResu
             "json_schema": {
                 "name": "vlm_extraction_result",
                 "schema": VlmExtractionResult.model_json_schema(),
-                "strict": True,  # remove if validation fails
+                # "strict": True,  # remove if validation fails
             },
         },
     )

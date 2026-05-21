@@ -17,7 +17,7 @@ Stworzenie aplikacji REST API (FastAPI), która przyjmuje obrazy dokumentów (fa
 ### 3. Modele AI i Logika Przetwarzania
 
 - **Ekstrakcja (VLM):** Zewnętrzne API przez OpenRouter (model konfigurowalny, np. `gpt-4o-mini` lub `anthropic/claude-3-haiku`).
-  - _Zadanie:_ Model ma zwrócić czysty JSON zawierający dwie sekcje: `raw_text` (cały tekst) oraz `structured_data` (pola: `filename`, `date`, `buyer`, `seller`, `currency`, `total_net`, `total_vat`, `total_gross`, `items` [lista produktów z cenami]).
+  - _Zadanie:_ Model ma zwrócić czysty JSON zawierający dwie sekcje: `raw_text` (cały tekst) oraz `structured_data` (pola: `invoice_no`, `date`, `buyer`, `seller`, `currency`, `total_net`, `total_vat`, `total_gross`, `items` [lista produktów z cenami: `item_name`, `quantity`, `unit_price`, `total_line_net`, `total_line_gross`]).
 - **Embeddingi:** Lokalny model `sentence-transformers/all-MiniLM-L6-v2` uruchamiany wewnątrz kontenera API.
 - **Generowanie odpowiedzi (LLM):** Zewnętrzne API przez OpenRouter. Bardzo restrykcyjny System Prompt: _"Jesteś asystentem księgowym. Odpowiadaj na pytania WYŁĄCZNIE na podstawie dostarczonego kontekstu. Jeśli w kontekście nie ma odpowiedzi, napisz 'Brak informacji w dokumencie'."_
 
@@ -28,7 +28,7 @@ Stworzenie aplikacji REST API (FastAPI), która przyjmuje obrazy dokumentów (fa
   - _Token-aware:_ Przed wektoryzacją system sprawdza długość sekcji w tokenach/znakach. Jeśli sekcja (np. długa lista produktów) przekracza limit modelu (np. 400 tokenów), jest dzielona na mniejsze podsekcje.
   - _Formatowanie:_ JSON jest zamieniany na tekst Key-Value (np. "Sekcja: Nagłówek. Sprzedawca: X. Nabywca: Y.") dla lepszej jakości embeddingów.
 - **Metadane w Qdrant (Payload):**
-  - Każdy wektor musi zawierać w payloadzie: `document_id`, `section_type`, `source_text` (oryginalny tekst chunku), `filename`, `date`, `buyer`, `seller`, `currency`, `total_net`, `total_vat`, `total_gross`.
+  - Każdy wektor musi zawierać w payloadzie: `document_id`, `section_type`, `source_text` (oryginalny tekst chunku), `invoice_no`, `date`, `buyer`, `seller`, `currency`, `total_net`, `total_vat`, `total_gross`.
 
 ### 5. Asynchroniczność i Obsługa Błędów
 

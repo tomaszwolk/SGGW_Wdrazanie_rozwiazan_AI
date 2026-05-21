@@ -30,7 +30,7 @@ Wszystkie zasoby zostaną wdrożone w dedykowanej przestrzeni nazw (Namespace), 
 - **Zasób 2:** `Secret` (Nazwa: `app-secrets`)
   - **Cel:** Bezpieczne przechowywanie kluczy API (kodowane w Base64).
   - **Klucze:**
-    - `OPENROUTER_API_KEY`: (wartość zakodowana w Base64)
+    - `OPENROUTER_API_KEY`: (wartość zakodowana w Base64, znajduje się w .env)
 
 ---
 

@@ -24,6 +24,7 @@ ocr-rag-api/
 │ │ └── qdrant.py # Konfiguracja i inicjalizacja klienta Qdrant
 │ └── utils/
 │ ├── **init**.py
+│ ├── upload_validation.py # Walidacja przesłanych plików
 │ └── text_processing.py # Funkcje pomocnicze: chunking, liczenie tokenów, formatowanie Key-Value
 │
 ├── k8s/ # Manifesty Kubernetes

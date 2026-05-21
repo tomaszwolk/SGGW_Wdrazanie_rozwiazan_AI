@@ -14,11 +14,12 @@ class InvoiceItem(BaseModel):
     item_name: str | None = None
     quantity: float | None = None
     unit_price: float | None = None
-    total_price: float | None = None
+    total_line_net: float | None = None
+    total_line_gross: float | None = None
 
 
 class StructuredData(BaseModel):
-    filename: str
+    invoice_no: str | None = None
     date: str | None = None
     buyer: str | None = None
     seller: str | None = None

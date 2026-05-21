@@ -63,12 +63,23 @@ Wszystkie endpointy zwracają dane w formacie JSON (z wyjątkiem błędów walid
     "status": "completed",
     "raw_text": "Pełny tekst odczytany z dokumentu...",
     "structured_data": {
-      "filename": "faktura_123.jpg",
+      "invoice_no": "FV_123456",
       "date": "2023-10-12",
       "buyer": "Firma ABC",
       "seller": "Sklep XYZ",
       "total_gross": 150.50,
-      "items": [...]
+      "items": [
+        {
+          "item_name": "Metal Bottle Stopper Wine Saver",
+          "quantity": 3,
+          "unit_price": 19.98,
+          "total_line_net": 59.94,
+          "totla_line_gross": 65.93
+        },
+        {
+          ...
+        }
+      ]
     },
     "error_message": null
   }

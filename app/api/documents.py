@@ -57,7 +57,7 @@ async def upload_document(
 
     # start background task to process document
     background_tasks.add_task(
-        process_document_vlm, document, document_id, upload_path, file_name, suffix
+        process_document_vlm, document_id, upload_path, file_name, suffix
     )
 
     return JSONResponse(

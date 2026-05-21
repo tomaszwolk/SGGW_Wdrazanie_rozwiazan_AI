@@ -66,6 +66,7 @@ Każdy wektor (Point) w Qdrancie reprezentuje jeden chunk logiczny dokumentu (np
 | `section_type` | String        | Typ chunku: `header`, `items`, `summary`.                                                           | Tak      |
 | `source_text`  | String        | Złożony tekst (Key-Value), który posłużył do wygenerowania wektora. Zwracany do LLMa jako kontekst. | Tak      |
 | `filename`     | String        | Nazwa pliku źródłowego.                                                                             | Tak      |
+| `invoice_no`   | String        | Numer dokumentu.                                                                                    | Nie      |
 | `date`         | String        | Data wystawienia dokumentu (np. "2023-10-12").                                                      | Nie      |
 | `buyer`        | String        | Nazwa nabywcy.                                                                                      | Nie      |
 | `seller`       | String        | Nazwa sprzedawcy.                                                                                   | Nie      |

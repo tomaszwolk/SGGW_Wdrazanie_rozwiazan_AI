@@ -1,7 +1,5 @@
-from typing import Annotated
 from uuid import UUID
 
-from fastapi import Depends, HTTPException
 from loguru import logger
 from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, SQLModel, create_engine, select
