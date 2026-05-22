@@ -75,3 +75,19 @@ class SearchResultItem(BaseModel):
 class SearchResponse(BaseModel):
     query: str
     results: list[SearchResultItem]
+
+
+class AnswerRequest(BaseModel):
+    question: str
+    top_k: int = 3
+
+
+class AnswerSource(BaseModel):
+    document_id: str
+    source_text: str
+
+
+class AnswerResponse(BaseModel):
+    question: str
+    answer: str
+    sources: list[AnswerSource]

@@ -7,6 +7,7 @@ ocr-rag-api/
 │ │ └── config.py # Konfiguracja aplikacji (pydantic-settings, ładowanie env)
 │ ├── api/
 │ │ ├── **init**.py
+│ │ ├── health.py # Endpoint: /health
 │ │ ├── documents.py # Endpointy: /documents/upload, /documents/{id}, /documents/{id}/index
 │ │ └── rag.py # Endpointy: /rag/search, /rag/answer
 │ ├── models/
