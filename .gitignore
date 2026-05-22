@@ -15,6 +15,7 @@ wheels/
 # Data
 data/*.db
 data/uploads/*
+data/invoices/*
 
 # test files
 a.py

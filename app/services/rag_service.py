@@ -1,3 +1,4 @@
+from loguru import logger
 from openai import APIConnectionError, APITimeoutError, OpenAI, RateLimitError
 from openai.types.chat import ChatCompletionMessageParam
 from qdrant_client import QdrantClient
@@ -144,3 +145,31 @@ def answer_question(question: str, sources: list[AnswerSource]) -> str | None:
         timeout=60,
     )
     return response.choices[0].message.content
+
+
+def index_all_completed_documents(
+    embedder: SentenceTransformer,
+    qdrant_client: QdrantClient,
+    document_ids: list[str],
+) -> dict[str, list]:
+    indexed: list[dict[str, object]] = []
+    failed: list[dict[str, str]] = []
+
+    for document_id in document_ids:
+        try:
+            chunks_indexed = index_document(
+                document_id=document_id,
+                embedder=embedder,
+                qdrant_client=qdrant_client,
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception("Indexing failed for document {}", document_id)
+            failed.append({"document_id": document_id})
+        else:
+            indexed.append(
+                {"document_id": document_id, "chunks_indexed": chunks_indexed}
+            )
+    return {
+        "indexed": indexed,
+        "failed": failed,
+    }

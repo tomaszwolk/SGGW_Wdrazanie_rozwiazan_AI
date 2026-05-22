@@ -2,10 +2,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from loguru import logger
+from qdrant_client import QdrantClient
+from sentence_transformers import SentenceTransformer
 from sqlmodel import Session
 
 from app.db.sqlite import engine
 from app.models.domain import Document, DocumentStatus
+from app.services.rag_service import index_all_completed_documents
 from app.services.vlm_service import extract_structured_data
 
 
@@ -57,3 +60,17 @@ def process_document_vlm(
 
     upload_path.unlink(missing_ok=True)
     logger.info("VLM completed processing document {}", document_id)
+
+
+def process_index_all_documents(
+    embedder: SentenceTransformer,
+    qdrant_client: QdrantClient,
+    document_ids: list[str],
+) -> None:
+    logger.info("Indexing all completed documents")
+    summary = index_all_completed_documents(embedder, qdrant_client, document_ids)
+    logger.info(
+        "Bulk index finished: {} indexed, {} failed",
+        len(summary["indexed"]),
+        len(summary["failed"]),
+    )

@@ -5,7 +5,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import Session, SQLModel, create_engine, select
 
 from app.core.config import get_settings
-from app.models.domain import Document
+from app.models.domain import Document, DocumentStatus
 
 settings = get_settings()
 engine = create_engine(
@@ -36,3 +36,11 @@ def check_sqlite() -> bool:
 
 def get_document(document_id: UUID, session: Session) -> Document | None:
     return session.get(Document, str(document_id))
+
+
+def list_completed_document_ids() -> list[str]:
+    with Session(engine) as session:
+        rows = session.exec(
+            select(Document.id).where(Document.status == DocumentStatus.COMPLETED)
+        ).all()
+    return list(rows)

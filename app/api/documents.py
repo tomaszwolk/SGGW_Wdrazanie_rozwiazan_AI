@@ -19,15 +19,19 @@ from loguru import logger
 from sqlmodel import Session
 
 from app.core.config import get_settings
-from app.db.sqlite import get_document, get_session
+from app.db.sqlite import get_document, get_session, list_completed_document_ids
 from app.models.domain import Document, DocumentStatus
 from app.models.schemas import (
+    BulkIndexResponse,
     DocumentDetailResponse,
     IndexResponse,
     StructuredData,
     UploadResponse,
 )
-from app.services.background_tasks import process_document_vlm
+from app.services.background_tasks import (
+    process_document_vlm,
+    process_index_all_documents,
+)
 from app.services.rag_service import (
     DocumentNotCompletedError,
     DocumentNotFoundError,
@@ -149,5 +153,36 @@ async def index_document_rag(document_id: UUID, request: Request) -> JSONRespons
             document_id=doc_id,
             message=message,
             chunks_indexed=chunks_indexed,
+        ).model_dump(),
+    )
+
+
+@router.post("/index-all", response_model=BulkIndexResponse)
+async def index_all_documents_rag(
+    background_tasks: BackgroundTasks, request: Request
+) -> JSONResponse:
+    document_ids = list_completed_document_ids()
+    if not document_ids:
+        return JSONResponse(
+            status_code=200,
+            content=BulkIndexResponse(
+                message="No completed documents to index",
+                documents_queued=0,
+                document_ids=[],
+            ).model_dump(),
+        )
+
+    background_tasks.add_task(
+        process_index_all_documents,
+        request.app.state.embedder,
+        request.app.state.qdrant_client,
+        document_ids,
+    )
+    return JSONResponse(
+        status_code=202,
+        content=BulkIndexResponse(
+            message="Indexing all completed documents",
+            documents_queued=len(document_ids),
+            document_ids=document_ids,
         ).model_dump(),
     )

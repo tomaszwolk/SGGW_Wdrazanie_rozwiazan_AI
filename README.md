@@ -31,15 +31,39 @@ uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 W K8s ścieżki danych to `/app/data` (PVC); lokalnie domyślnie `./data/` (SQLite, uploady).
 
-### Scenariusz testowy (E2E)
+### Endpointy API (skrót)
+
+| Metoda | Ścieżka | Opis |
+|--------|---------|------|
+| `GET` | `/health` | SQLite + Qdrant |
+| `POST` | `/documents/upload` | Obraz → VLM w tle (202) |
+| `GET` | `/documents/{document_id}` | Status i dane po VLM |
+| `POST` | `/documents/{document_id}/index` | Jeden dokument → Qdrant |
+| `POST` | `/documents/index-all` | Wszystkie `completed` → Qdrant w tle (202) |
+| `POST` | `/rag/search` | Wyszukiwanie semantyczne |
+| `POST` | `/rag/answer` | RAG + LLM (OpenRouter) |
+
+### Scenariusz testowy (E2E) — jedna faktura
 
 1. `POST /documents/upload` — plik `.jpg` / `.png`
-2. `GET /documents/{id}` — poll aż `status: completed`
-3. `POST /documents/{id}/index` — wektory w Qdrant
+2. `GET /documents/{document_id}` — poll aż `status: completed`
+3. `POST /documents/{document_id}/index` — wektory w Qdrant (200, `chunks_indexed`)
 4. `POST /rag/search` — body: `{"query": "...", "top_k": 3}`
 5. `POST /rag/answer` — body: `{"question": "...", "top_k": 3}`
 
-Przy `--reload` zadanie VLM w tle może się urwać — na pełny E2E lepiej bez reload.
+### Wiele faktur (bez ręcznego `document_id`)
+
+1. Wgraj wiele plików (`POST /documents/upload` × N).
+2. Poczekaj, aż wszystkie mają `status: completed` (GET per id lub logi VLM).
+3. **`POST /documents/index-all`** — indeksuje **wszystkie** dokumenty ze statusem `completed` w tle.
+   - **202** — zwraca `documents_queued` i listę `document_ids` (snapshot w momencie wywołania).
+   - Postęp w logach: `Bulk index finished: X indexed, Y failed`.
+   - **200** z pustą listą — brak `completed` do indeksacji.
+4. `POST /rag/search` / `POST /rag/answer` — zapytania po całej kolekcji w Qdrant.
+
+Pojedynczy dokument nadal można zindeksować przez `POST /documents/{document_id}/index` (np. re-indeksacja po zmianie chunkingu).
+
+Przy `--reload` zadania w tle (VLM, bulk index) mogą się urwać — na E2E i przy `index-all` **lepiej bez** `--reload`.
 
 ---
 
@@ -83,9 +107,11 @@ Secret `OPENROUTER_API_KEY` — w manifeście Base64 lub `kubectl create secret`
 | Złożoność | Niska — wystarczy na VLM po uploadzie | Wyższa — kolejki, monitoring workerów |
 | Skalowanie | Jedna replika API; długie VLM obciąża ten sam pod | Wiele workerów, rozłożenie zadań |
 | Trwałość zadań | Zadanie ginie przy restarcie procesu | Kolejka przetrwa restart workera |
-| Ten projekt | Jedna faktura → jedno zadanie w tle, zaliczenie lokalne/K8s | Przydatne przy dużym wolumenie i SLA |
+| Ten projekt | VLM po uploadzie + **bulk index** (`/index-all`) w tle | Przydatne przy dużym wolumenie i SLA |
 
 **Wniosek:** Dla zaliczenia i lokalnego K8s BackgroundTasks to świadomy trade-off: prostsze wdrożenie, mniej komponentów. Celery ma sens przy masowym OCR i oddzielnym skalowaniu workerów.
+
+Bulk index **nie** woła w pętli wewnętrznego HTTP — ten sam kod co `/{document_id}/index` (`index_document()`), lista ID przekazana z routera do taska (jedno zapytanie do SQLite).
 
 ---
 
@@ -103,7 +129,10 @@ Secret `OPENROUTER_API_KEY` — w manifeście Base64 lub `kubectl create secret`
 
 ### Indeksowanie i re-indeksacja
 
-Przed każdym `POST .../index` dla dokumentu: **`delete_by_document_id`** (filtr po `document_id` w payload), potem batch **`upsert`**. Powód: liczba chunków `items` zależy od długości listy produktów — sam upsert zostawiałby stare punkty („zombie”). Losowe UUID v4 na chunki nie są potrzebne przy tym podejściu.
+Przed każdym indeksem pojedynczego dokumentu: **`delete_by_document_id`**, potem batch **`upsert`**. Powód: zmienna liczba chunków `items` — bez delete zostają „zombie” punkty w Qdrant.
+
+- **`POST /documents/{document_id}/index`** — synchronicznie, wynik od razu (`chunks_indexed`).
+- **`POST /documents/index-all`** — wszystkie `completed` z SQLite; **BackgroundTasks**; odpowiedź **202** z listą ID, która zostanie zindeksowana (bez drugiego SELECT w serwisie). Błąd jednego dokumentu nie przerywa reszty (log + wpis w `failed` w logach podsumowania).
 
 ### Chunking
 
@@ -187,6 +216,7 @@ k8s/            (do dodania) manifesty YAML
 
 ## Co jeszcze zrobić przed oddaniem
 
+- [x] API dokumentów + RAG (`/index-all` w tym)
 - [ ] `Dockerfile` + `.dockerignore` → uzupełnij sekcję Docker powyżej
 - [ ] `k8s/01`–`05` → uzupełnij sekcję Kubernetes
-- [ ] Test na klastrze: `http://localhost:30080/health` + pełny flow E2E
+- [ ] Test na klastrze: `http://localhost:30080/health` + flow E2E (upload × N → `index-all` → search/answer)

@@ -91,3 +91,9 @@ class AnswerResponse(BaseModel):
     question: str
     answer: str
     sources: list[AnswerSource]
+
+
+class BulkIndexResponse(BaseModel):
+    message: str
+    documents_queued: int
+    document_ids: list[str]
