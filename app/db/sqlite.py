@@ -46,6 +46,62 @@ def list_completed_document_ids() -> list[str]:
     return list(rows)
 
 
+def _escape_like(term: str) -> str:
+    return term.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def find_completed_documents_by_structured_data_substring(
+    term: str,
+    *,
+    limit: int = 3,
+    exclude_document_ids: set[str] | None = None,
+) -> list[Document]:
+    if not term.strip():
+        return []
+    exclude = exclude_document_ids or set()
+    pattern = f"%{_escape_like(term)}%"
+    with Session(engine) as session:
+        rows = session.exec(
+            select(Document)
+            .where(Document.status == DocumentStatus.COMPLETED)
+            .where(Document.structured_data.isnot(None))  # type: ignore[union-attr]
+            .where(Document.structured_data.like(pattern, escape="\\"))  # type: ignore[union-attr]
+            .limit(limit + len(exclude))
+        ).all()
+    documents: list[Document] = []
+    for document in rows:
+        if document.id in exclude:
+            continue
+        documents.append(document)
+        if len(documents) >= limit:
+            break
+    return documents
+
+
+def find_completed_documents_for_invoice_candidates(
+    candidates: list[str],
+    *,
+    limit: int = 3,
+    exclude_document_ids: set[str] | None = None,
+) -> list[Document]:
+    exclude = set(exclude_document_ids or ())
+    found: list[Document] = []
+    for term in candidates:
+        if len(found) >= limit:
+            break
+        batch = find_completed_documents_by_structured_data_substring(
+            term,
+            limit=limit - len(found),
+            exclude_document_ids=exclude,
+        )
+        for document in batch:
+            exclude.add(document.id)
+            found.append(document)
+            if len(found) >= limit:
+                break
+    return found
+
+
 def get_completed_documents_by_ids(document_ids: list[str]) -> list[Document]:
     if not document_ids:
         return []

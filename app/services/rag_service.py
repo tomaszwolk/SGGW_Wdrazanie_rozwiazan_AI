@@ -21,7 +21,12 @@ from app.db.qdrant import (
     search_vectors,
     upsert_chunks,
 )
-from app.db.sqlite import engine, get_completed_documents_by_ids
+from app.db.sqlite import (
+    engine,
+    find_completed_documents_for_invoice_candidates,
+    get_completed_documents_by_ids,
+)
+from app.utils.query_parsing import extract_invoice_number_candidates
 from app.models.domain import Document, DocumentStatus
 from app.models.schemas import (
     SearchResultItem,
@@ -58,6 +63,10 @@ Answer:"""
 
 class DocumentNotCompletedError(Exception):
     pass
+
+
+SQL_MATCH_SCORE = 1.0
+SQL_APPEND_MAX_DOCUMENTS = 3
 
 
 def index_document(
@@ -111,6 +120,47 @@ def search_documents(
     query_vector = _vector_to_list(embedder.encode(query))
     hits = search_vectors(qdrant_client, query_vector, top_k)
     return [_scored_point_to_result(hit) for hit in hits]
+
+
+def _document_to_sql_search_result(document: Document) -> SearchResultItem:
+    structured = StructuredData.model_validate_json(document.structured_data or "{}")
+    if structured.invoice_no:
+        source_text = f"invoice_no: {structured.invoice_no}"
+    else:
+        raw = document.structured_data or "{}"
+        source_text = raw[:500] if len(raw) > 500 else raw
+    return SearchResultItem(
+        document_id=document.id,
+        score=SQL_MATCH_SCORE,
+        section_type="sql_match",
+        source_text=source_text,
+        metadata=SearchResultMetadata(
+            filename=document.filename,
+            date=structured.date,
+        ),
+    )
+
+
+def hybrid_search(
+    query: str,
+    embedder: SentenceTransformer,
+    qdrant_client: QdrantClient,
+    top_k: int | None = None,
+) -> list[SearchResultItem]:
+    """Qdrant vector search, then up to 3 SQLite hits not already in vector results."""
+    vector_hits = search_documents(query, embedder, qdrant_client, top_k=top_k)
+    vector_ids = {hit.document_id for hit in vector_hits}
+    candidates = extract_invoice_number_candidates(query)
+    if not candidates:
+        return vector_hits
+
+    sql_documents = find_completed_documents_for_invoice_candidates(
+        candidates,
+        limit=SQL_APPEND_MAX_DOCUMENTS,
+        exclude_document_ids=vector_ids,
+    )
+    sql_hits = [_document_to_sql_search_result(document) for document in sql_documents]
+    return vector_hits + sql_hits
 
 
 def _format_structured_data_json(raw: str) -> str:

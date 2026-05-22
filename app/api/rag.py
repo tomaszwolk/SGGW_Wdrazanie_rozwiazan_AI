@@ -13,7 +13,7 @@ from app.models.schemas import (
 from app.services.rag_service import (
     answer_question,
     enrich_search_results_with_sqlite,
-    search_documents,
+    hybrid_search,
 )
 
 settings = get_settings()
@@ -33,7 +33,7 @@ router = APIRouter(prefix="/rag", tags=["rag"])
 def search_documents_rag(request: Request, body: SearchRequest) -> JSONResponse:
     top_k = _resolve_top_k(body.top_k)
     try:
-        results = search_documents(
+        results = hybrid_search(
             query=body.query,
             embedder=request.app.state.embedder,
             qdrant_client=request.app.state.qdrant_client,
@@ -59,7 +59,7 @@ def answer_rag(request: Request, body: AnswerRequest) -> JSONResponse:
 
     top_k = _resolve_top_k(body.top_k)
     try:
-        results: list[SearchResultItem] = search_documents(
+        results: list[SearchResultItem] = hybrid_search(
             query=question,
             embedder=request.app.state.embedder,
             qdrant_client=request.app.state.qdrant_client,

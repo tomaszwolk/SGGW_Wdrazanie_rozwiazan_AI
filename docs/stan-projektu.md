@@ -58,9 +58,9 @@ Ostatnia aktualizacja: 2026-05-22 (API RAG domknięte, `/health` w `api/health.p
 
 | `POST /documents/{id}/index` | 404 / 409 / 500, `IndexResponse`, `index_document()` |
 
-| `POST /rag/search` | body `SearchRequest`, `SearchResponse` + `SearchResultItem` |
+| `POST /rag/search` | `hybrid_search` (Qdrant + opcjonalnie SQLite), `SearchResultItem` + `metadata.entire_document` |
 
-| `POST /rag/answer` | body `AnswerRequest`, `AnswerResponse` + `sources: list[SearchResultItem]`, `metadata.entire_document`, `_format_answer_context()` |
+| `POST /rag/answer` | jak search + LLM; `sources: list[SearchResultItem]`, `_format_answer_context()` |
 
 | Routery | `documents`, `rag`, `health` — podpięte w `main.py` |
 
@@ -140,6 +140,7 @@ Wielokrotne `index` na tym samym dokumencie — bez duplikatów (delete przed up
 
 
 
+- **Hybrid search** — `extract_invoice_number_candidates()` + `LIKE` na `structured_data` (max 3 nowych `document_id`, `section_type: sql_match` na końcu listy); `/search` i `/answer` przez `hybrid_search()`.
 - **`/rag/answer` sources** — ten sam kształt co `SearchResultItem`; `metadata.entire_document` z SQLite (JSON); do LLM pełny dokument tylko przy najwyższym `score` per `document_id`.
 
 - Kontekst LLM: **`_format_answer_context()`** (`--- Fragment N ---`, nie repr listy).
