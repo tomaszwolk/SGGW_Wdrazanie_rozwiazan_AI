@@ -48,8 +48,8 @@ W K8s ścieżki danych to `/app/data` (PVC); lokalnie domyślnie `./data/` (SQLi
 1. `POST /documents/upload` — plik `.jpg` / `.png`
 2. `GET /documents/{document_id}` — poll aż `status: completed`
 3. `POST /documents/{document_id}/index` — wektory w Qdrant (200, `chunks_indexed`)
-4. `POST /rag/search` — body: `{"query": "...", "top_k": 3}`
-5. `POST /rag/answer` — body: `{"question": "...", "top_k": 3}`
+4. `POST /rag/search` — body: `{"query": "..."}` (opcjonalnie `"top_k"`; bez niego lub `"top_k": 0` → `RAG_DEFAULT_TOP_K` z `.env`, np. `6`)
+5. `POST /rag/answer` — body: `{"question": "..."}` (opcjonalnie `"top_k"`; jak wyżej)
 
 ### Wiele faktur (bez ręcznego `document_id`)
 
@@ -146,10 +146,15 @@ Przed każdym indeksem pojedynczego dokumentu: **`delete_by_document_id`**, pote
 - **`Document.filename`** w SQLite = nazwa z uploadu; to samo w payloadzie Qdrant jako **`filename`**.
 - Pozycje: **`total_line_net`**, **`total_line_gross`**.
 
-### RAG `/answer`
+### RAG `/search` i `/answer`
 
-- Wyszukiwanie jak `/search`, potem kontekst przez **`_format_answer_context()`** (fragmenty `--- Fragment N (document_id: ...) ---`, nie repr listy Pythona).
-- **`AnswerSource`** w odpowiedzi — tylko `document_id` + `source_text` (wężej niż `SearchResultItem` ze score/metadata).
+- Domyślne **`top_k`** = **`RAG_DEFAULT_TOP_K`** z `.env` (np. `6`). Jeśli w body nie ma `top_k`, jest `null` albo **`top_k: 0`** (częste w Swagger UI) — serwer używa wartości domyślnej z konfiguracji, nie zwraca pustej listy hitów.
+- Oba endpointy zwracają **`SearchResultItem`** z **`metadata.entire_document`** (JSON z `structured_data`, `indent=2`) na każdym hicie — **`enrich_search_results_with_sqlite()`**.
+
+### RAG `/answer` (dodatkowo)
+
+- **`sources`** w odpowiedzi = wzbogacone wyniki search (jak `/search`).
+- Kontekst LLM: **`_format_answer_context()`** — każdy hit dostarcza chunk (`source_text`); pełny JSON dokumentu tylko przy hicie z **najwyższym `score`** dla danego `document_id` (bez powtórzeń w prompcie).
 - Brak wyników search → odpowiedź `"No information available"` **bez** wywołania LLM.
 
 ### VLM (OpenRouter)

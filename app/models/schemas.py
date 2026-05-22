@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.domain import DocumentStatus
 
@@ -56,12 +56,17 @@ class IndexResponse(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str
-    top_k: int = 3
+    top_k: int | None = Field(
+        default=None,
+        description="Liczba trafień z Qdrant. Pomiń, null lub 0 (Swagger) — użyty zostanie RAG_DEFAULT_TOP_K z konfiguracji serwera.",
+        json_schema_extra={"example": None},
+    )
 
 
 class SearchResultMetadata(BaseModel):
     filename: str | None = None
     date: str | None = None
+    entire_document: str | None = None
 
 
 class SearchResultItem(BaseModel):
@@ -79,18 +84,17 @@ class SearchResponse(BaseModel):
 
 class AnswerRequest(BaseModel):
     question: str
-    top_k: int = 3
-
-
-class AnswerSource(BaseModel):
-    document_id: str
-    source_text: str
+    top_k: int | None = Field(
+        default=None,
+        description="Liczba trafień z Qdrant. Pomiń, null lub 0 (Swagger) — użyty zostanie RAG_DEFAULT_TOP_K z konfiguracji serwera.",
+        json_schema_extra={"example": None},
+    )
 
 
 class AnswerResponse(BaseModel):
     question: str
     answer: str
-    sources: list[AnswerSource]
+    sources: list[SearchResultItem]
 
 
 class BulkIndexResponse(BaseModel):

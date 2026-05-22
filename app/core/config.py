@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     SQLITE_PATH: str
     UPLOAD_DIR: str
     CHUNK_MAX_TOKENS: int
+    RAG_DEFAULT_TOP_K: int = 6
     APP_NAMESPACE: UUID = uuid5(
         UUID("00000000-0000-0000-0000-000000000000"), "ai-rag-app"
     )

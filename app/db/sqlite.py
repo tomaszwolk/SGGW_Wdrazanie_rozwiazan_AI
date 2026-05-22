@@ -44,3 +44,18 @@ def list_completed_document_ids() -> list[str]:
             select(Document.id).where(Document.status == DocumentStatus.COMPLETED)
         ).all()
     return list(rows)
+
+
+def get_completed_documents_by_ids(document_ids: list[str]) -> list[Document]:
+    if not document_ids:
+        return []
+    with Session(engine) as session:
+        documents: list[Document] = []
+        for document_id in document_ids:
+            document = session.get(Document, document_id)
+            if (
+                document is not None
+                and document.status == DocumentStatus.COMPLETED
+            ):
+                documents.append(document)
+        return documents

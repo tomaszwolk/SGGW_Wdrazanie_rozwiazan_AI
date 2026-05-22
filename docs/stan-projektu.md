@@ -60,7 +60,7 @@ Ostatnia aktualizacja: 2026-05-22 (API RAG domknięte, `/health` w `api/health.p
 
 | `POST /rag/search` | body `SearchRequest`, `SearchResponse` + `SearchResultItem` |
 
-| `POST /rag/answer` | body `AnswerRequest`, `AnswerResponse` + `AnswerSource`, `_format_answer_context()` |
+| `POST /rag/answer` | body `AnswerRequest`, `AnswerResponse` + `sources: list[SearchResultItem]`, `metadata.entire_document`, `_format_answer_context()` |
 
 | Routery | `documents`, `rag`, `health` — podpięte w `main.py` |
 
@@ -140,7 +140,7 @@ Wielokrotne `index` na tym samym dokumencie — bez duplikatów (delete przed up
 
 
 
-- **`AnswerSource`** — węższy kontrakt niż `SearchResultItem` (tylko `document_id`, `source_text`).
+- **`/rag/answer` sources** — ten sam kształt co `SearchResultItem`; `metadata.entire_document` z SQLite (JSON); do LLM pełny dokument tylko przy najwyższym `score` per `document_id`.
 
 - Kontekst LLM: **`_format_answer_context()`** (`--- Fragment N ---`, nie repr listy).
 
