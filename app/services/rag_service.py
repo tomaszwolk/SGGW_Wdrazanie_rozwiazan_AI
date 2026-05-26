@@ -26,13 +26,13 @@ from app.db.sqlite import (
     find_completed_documents_for_invoice_candidates,
     get_completed_documents_by_ids,
 )
-from app.utils.query_parsing import extract_invoice_number_candidates
 from app.models.domain import Document, DocumentStatus
 from app.models.schemas import (
     SearchResultItem,
     SearchResultMetadata,
     StructuredData,
 )
+from app.utils.query_parsing import extract_invoice_number_candidates
 from app.utils.text_processing import build_chunks
 
 
@@ -67,6 +67,8 @@ class DocumentNotCompletedError(Exception):
 
 SQL_MATCH_SCORE = 1.0
 SQL_APPEND_MAX_DOCUMENTS = 3
+# Fallback source_text for sql_match hits when invoice_no is missing (JSON preview).
+SQL_MATCH_SOURCE_TEXT_MAX_LEN = 500
 
 
 def index_document(
@@ -128,7 +130,7 @@ def _document_to_sql_search_result(document: Document) -> SearchResultItem:
         source_text = f"invoice_no: {structured.invoice_no}"
     else:
         raw = document.structured_data or "{}"
-        source_text = raw[:500] if len(raw) > 500 else raw
+        source_text = raw[:SQL_MATCH_SOURCE_TEXT_MAX_LEN]
     return SearchResultItem(
         document_id=document.id,
         score=SQL_MATCH_SCORE,

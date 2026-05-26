@@ -15,7 +15,6 @@ from app.services.vlm_service import extract_structured_data
 def process_document_vlm(
     document_id: str,
     upload_path: Path,
-    file_name: str,
     suffix: str,
 ):
     logger.info("VLM started processing document {}", document_id)
@@ -32,7 +31,7 @@ def process_document_vlm(
 
     try:
         vlm_extraction_result = extract_structured_data(upload_path, suffix)
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.exception("VLM failed to process document {}", document_id)
         with Session(engine) as session:
             document = session.get(Document, document_id)
