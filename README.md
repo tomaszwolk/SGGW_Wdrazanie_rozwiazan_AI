@@ -14,6 +14,15 @@ REST API (FastAPI): upload skanów faktur → ekstrakcja VLM (OpenRouter) → in
 - Klucz **OpenRouter** w `.env` (VLM + LLM)
 - Do wdrożenia K8s: Docker Desktop z Kubernetes, `kubectl`
 
+### Wybór modeli OpenRouter (testy)
+
+| Rola | Zmienna `.env` | Model | Uzasadnienie |
+|------|----------------|-------|--------------|
+| **VLM** (OCR / ekstrakcja z obrazu) | `VLM_MODEL_NAME` | `openai/gpt-4o-mini` | Tańsze modele w testach nie odczytywały wszystkich pól ze skanów faktur. |
+| **LLM** (odpowiedzi RAG) | `LLM_MODEL_NAME` | `deepseek/deepseek-v4-flash` | Wystarczający do Q&A na kontekście z chunków; niski koszt. Darmowe modele na OpenRouter często były przeciążone (**503**). |
+
+Wartości ustawiasz w `.env` (wzór: [.env.example](.env.example)).
+
 ---
 
 ## Uruchomienie lokalne (dev)
@@ -42,6 +51,76 @@ W K8s ścieżki danych to `/app/data` (PVC); lokalnie domyślnie `./data/` (SQLi
 | `POST` | `/documents/index-all` | Wszystkie `completed` → Qdrant w tle (202) |
 | `POST` | `/rag/search` | Wyszukiwanie semantyczne |
 | `POST` | `/rag/answer` | RAG + LLM (OpenRouter) |
+
+### Przepływ wywołań (diagram)
+
+Poniżej: które **funkcje** (pliki w `app/`) są wywoływane po trafieniu w dany endpoint. Strzałki `-.->` = zadanie w tle (`BackgroundTasks`).
+
+```mermaid
+flowchart TB
+  subgraph START["Startup — lifespan (main.py)"]
+    direction TB
+    S1[init_db] --> S2["SentenceTransformer → app.state.embedder"]
+    S2 --> S3["get_qdrant_client → app.state.qdrant_client"]
+    S3 --> S4[ensure_collection]
+  end
+
+  subgraph HEALTH["GET /health — health.py"]
+    H1[check_sqlite] --> H2[health_check_qdrant]
+    H2 --> H3[HealthResponse]
+  end
+
+  subgraph UPLOAD["POST /documents/upload — documents.py"]
+    U1[validate_upload_file] --> U2["SQLite: Document status=queued"]
+    U2 -.-> U3[process_document_vlm]
+    U3 --> U4[extract_structured_data — vlm_service]
+    U4 --> U5["SQLite: raw_text, structured_data, status=completed"]
+    U5 --> U6[usunięcie pliku z UPLOAD_DIR]
+  end
+
+  subgraph GETDOC["GET /documents/{id} — documents.py"]
+    G1[get_document] --> G2["StructuredData.model_validate_json"]
+    G2 --> G3[DocumentDetailResponse]
+  end
+
+  subgraph INDEX1["POST /documents/{id}/index — documents.py"]
+    I1[index_document — rag_service] --> I2[build_chunks — text_processing]
+    I2 --> I3[delete_by_document_id — qdrant]
+    I3 --> I4["embedder.encode → upsert_chunks"]
+  end
+
+  subgraph INDEXALL["POST /documents/index-all — documents.py"]
+    A1[list_completed_document_ids] -.-> A2[process_index_all_documents]
+    A2 --> A3[index_all_completed_documents]
+    A3 --> I1
+  end
+
+  subgraph SEARCH["POST /rag/search — rag.py"]
+    R0[_resolve_top_k] --> R1[hybrid_search]
+    R1 --> R2[search_documents]
+    R2 --> R2a["embedder.encode → search_vectors — qdrant"]
+    R1 --> R3[extract_invoice_number_candidates — query_parsing]
+    R3 --> R4["find_completed_documents_for_invoice_candidates — sqlite"]
+    R4 --> R5[_document_to_sql_search_result]
+    R2 --> R6[merge vector + sql hits]
+    R5 --> R6
+    R6 --> R7[enrich_search_results_with_sqlite]
+    R7 --> R8[SearchResponse]
+  end
+
+  subgraph ANSWER["POST /rag/answer — rag.py"]
+    Q0[_resolve_top_k] --> Q1[hybrid_search]
+    Q1 --> Q7[enrich_search_results_with_sqlite]
+    Q7 --> Q8{wyniki puste?}
+    Q8 -->|tak| Q9["No information available"]
+    Q8 -->|nie| Q10[answer_question]
+    Q10 --> Q11[_format_answer_context]
+    Q11 --> Q12["OpenRouter chat.completions — LLM_MODEL_NAME"]
+    Q12 --> Q13[AnswerResponse + sources]
+  end
+```
+
+Skrót warstw: **router** (`app/api/*`) → **serwisy** (`vlm_service`, `rag_service`, `background_tasks`) → **bazy** (`sqlite`, `qdrant`) + lokalny **embedder** w `app.state`.
 
 ### Scenariusz testowy (E2E) — jedna faktura
 
@@ -158,11 +237,13 @@ Przed każdym indeksem pojedynczego dokumentu: **`delete_by_document_id`**, pote
 - Kontekst LLM: **`_format_answer_context()`** — każdy hit dostarcza chunk (`source_text`); pełny JSON dokumentu tylko przy hicie z **najwyższym `score`** dla danego `document_id` (bez powtórzeń w prompcie).
 - Brak wyników search → odpowiedź `"No information available"` **bez** wywołania LLM.
 
-### VLM (OpenRouter)
+### VLM i LLM (OpenRouter)
 
+- **VLM:** `extract_structured_data()` → model z `VLM_MODEL_NAME` (rekomendacja: **`openai/gpt-4o-mini`**).
+- **LLM:** `answer_question()` → model z `LLM_MODEL_NAME` (rekomendacja: **`deepseek/deepseek-v4-flash`**).
 - Retry (`tenacity`) na błędy sieciowe / rate limit — **nie** ponawiać `400` (zły schema/model).
 - `response_format` bez `strict` tam, gdzie provider odrzuca schema.
-- Po sukcesie — **usunięcie pliku obrazu** z dysku.
+- Po sukcesie VLM — **usunięcie pliku obrazu** z dysku.
 
 ### API
 
