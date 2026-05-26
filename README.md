@@ -16,10 +16,10 @@ REST API (FastAPI): upload skanów faktur → ekstrakcja VLM (OpenRouter) → in
 
 ### Wybór modeli OpenRouter (testy)
 
-| Rola | Zmienna `.env` | Model | Uzasadnienie |
-|------|----------------|-------|--------------|
-| **VLM** (OCR / ekstrakcja z obrazu) | `VLM_MODEL_NAME` | `openai/gpt-4o-mini` | Tańsze modele w testach nie odczytywały wszystkich pól ze skanów faktur. |
-| **LLM** (odpowiedzi RAG) | `LLM_MODEL_NAME` | `deepseek/deepseek-v4-flash` | Wystarczający do Q&A na kontekście z chunków; niski koszt. Darmowe modele na OpenRouter często były przeciążone (**503**). |
+| Rola                                | Zmienna `.env`   | Model                        | Uzasadnienie                                                                                                               |
+| ----------------------------------- | ---------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| **VLM** (OCR / ekstrakcja z obrazu) | `VLM_MODEL_NAME` | `openai/gpt-4o-mini`         | Tańsze modele w testach nie odczytywały wszystkich pól ze skanów faktur.                                                   |
+| **LLM** (odpowiedzi RAG)            | `LLM_MODEL_NAME` | `deepseek/deepseek-v4-flash` | Wystarczający do Q&A na kontekście z chunków; niski koszt. Darmowe modele na OpenRouter często były przeciążone (**503**). |
 
 Wartości ustawiasz w `.env` (wzór: [.env.example](.env.example)).
 
@@ -35,22 +35,23 @@ uv sync
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-- Swagger: http://localhost:8000/docs  
-- Health: http://localhost:8000/health  
+- Swagger: http://localhost:8000/docs
+- Health: http://localhost:8000/health
+- Qdrant: http://localhost:6333/dashboard
 
 W K8s ścieżki danych to `/app/data` (PVC); lokalnie domyślnie `./data/` (SQLite, uploady).
 
 ### Endpointy API (skrót)
 
-| Metoda | Ścieżka | Opis |
-|--------|---------|------|
-| `GET` | `/health` | SQLite + Qdrant |
-| `POST` | `/documents/upload` | Obraz → VLM w tle (202) |
-| `GET` | `/documents/{document_id}` | Status i dane po VLM |
-| `POST` | `/documents/{document_id}/index` | Jeden dokument → Qdrant |
-| `POST` | `/documents/index-all` | Wszystkie `completed` → Qdrant w tle (202) |
-| `POST` | `/rag/search` | Wyszukiwanie semantyczne |
-| `POST` | `/rag/answer` | RAG + LLM (OpenRouter) |
+| Metoda | Ścieżka                          | Opis                                       |
+| ------ | -------------------------------- | ------------------------------------------ |
+| `GET`  | `/health`                        | SQLite + Qdrant                            |
+| `POST` | `/documents/upload`              | Obraz → VLM w tle (202)                    |
+| `GET`  | `/documents/{document_id}`       | Status i dane po VLM                       |
+| `POST` | `/documents/{document_id}/index` | Jeden dokument → Qdrant                    |
+| `POST` | `/documents/index-all`           | Wszystkie `completed` → Qdrant w tle (202) |
+| `POST` | `/rag/search`                    | Wyszukiwanie semantyczne                   |
+| `POST` | `/rag/answer`                    | RAG + LLM (OpenRouter)                     |
 
 ### Przepływ wywołań (diagram)
 
@@ -146,15 +147,61 @@ Przy `--reload` zadania w tle (VLM, bulk index) mogą się urwać — na E2E i p
 
 ---
 
-## Docker (do uzupełnienia po dodaniu Dockerfile)
+## Docker
 
-> Po utworzeniu `Dockerfile` i `.dockerignore` uzupełnij tę sekcję konkretnymi komendami z Twojego pliku.
+Obraz API: **`ocr-rag-api:latest`**, port **8000**, dane w kontenerze pod **`/app/data`** (`SQLITE_PATH`, `UPLOAD_DIR` ustawione w Dockerfile).
+
+- **PyTorch CPU-only** — w `pyproject.toml` jawna zależność `torch` ze źródła [pytorch.org/whl/cpu](https://download.pytorch.org/whl/cpu) (`uv.lock` bez pakietów `nvidia-*`); podczas builda asercja `torch.version.cuda is None`.
+- **Pre-cache** modelu z `EMBEDDING_MODEL_NAME` (domyślnie `all-MiniLM-L6-v2`) w warstwie obrazu — szybszy start bez pobierania wag przy pierwszym żądaniu.
+- **Qdrant** nie jest w tym obrazie — osobno (Docker lub manifest `04-qdrant.yaml` w K8s).
+
+### Pobranie z Docker Hub (bez lokalnego buildu)
+
+Gotowy obraz: **[`tomaszwolk/ocr-rag-api`](https://hub.docker.com/r/tomaszwolk/ocr-rag-api)** na Docker Hub.
+
+```bash
+docker pull tomaszwolk/ocr-rag-api:latest
+```
+
+### Build (lokalnie)
 
 ```bash
 docker build -t ocr-rag-api:latest .
 ```
 
-Obraz docelowy: `ocr-rag-api:latest`, port **8000**, wolumen na dane: `/app/data`.
+Opcjonalnie inny model embeddingów przy buildzie:
+
+```bash
+docker build -t ocr-rag-api:latest --build-arg EMBEDDING_MODEL_NAME=sentence-transformers/all-MiniLM-L6-v2 .
+```
+
+Orientacyjny rozmiar obrazu: **~2–3 GB** (głównie PyTorch CPU + zależności; pre-cache MiniLM to ok. **+80–120 MB**).
+
+### Run (test bez Kubernetes)
+
+1. Qdrant (jeśli nie działa):
+
+```bash
+docker run -d --name qdrant -p 6333:6333 qdrant/qdrant:latest
+```
+
+2. API (zmienne z `.env`; na Docker Desktop host Qdrant = `host.docker.internal`):
+
+```bash
+docker run --rm -p 8000:8000 \
+  --env-file .env \
+  -e QDRANT_HOST=host.docker.internal \
+  -e SQLITE_PATH=/app/data/app.db \
+  -e UPLOAD_DIR=/app/data/uploads \
+  -v "$(pwd)/data:/app/data" \
+  ocr-rag-api:latest
+```
+
+- Health: http://localhost:8000/health
+- Swagger: http://localhost:8000/docs
+- Qdrant: http://localhost:6333/dashboard
+
+Przy pierwszym starcie kontenera inicjalizacja kolekcji Qdrant i embeddera może zająć **1–2 min** (probe w Dockerfile ma `start-period=180s`).
 
 ---
 
@@ -172,7 +219,7 @@ kubectl apply -f k8s/04-qdrant.yaml
 kubectl apply -f k8s/05-api.yaml
 ```
 
-API z hosta (Docker Desktop): http://localhost:30080/health  
+API z hosta (Docker Desktop): http://localhost:30080/health
 
 Secret `OPENROUTER_API_KEY` — w manifeście Base64 lub `kubectl create secret` (nie commituj prawdziwego klucza).
 
@@ -180,13 +227,13 @@ Secret `OPENROUTER_API_KEY` — w manifeście Base64 lub `kubectl create secret`
 
 ## Dlaczego `BackgroundTasks`, a nie Celery/Redis?
 
-| | **FastAPI BackgroundTasks** | **Celery + Redis** |
-|---|---------------------------|-------------------|
-| Infrastruktura | Brak kolejki — ten sam proces co API | Osobny broker (Redis/RabbitMQ) i worker(y) |
-| Złożoność | Niska — wystarczy na VLM po uploadzie | Wyższa — kolejki, monitoring workerów |
-| Skalowanie | Jedna replika API; długie VLM obciąża ten sam pod | Wiele workerów, rozłożenie zadań |
-| Trwałość zadań | Zadanie ginie przy restarcie procesu | Kolejka przetrwa restart workera |
-| Ten projekt | VLM po uploadzie + **bulk index** (`/index-all`) w tle | Przydatne przy dużym wolumenie i SLA |
+|                | **FastAPI BackgroundTasks**                            | **Celery + Redis**                         |
+| -------------- | ------------------------------------------------------ | ------------------------------------------ |
+| Infrastruktura | Brak kolejki — ten sam proces co API                   | Osobny broker (Redis/RabbitMQ) i worker(y) |
+| Złożoność      | Niska — wystarczy na VLM po uploadzie                  | Wyższa — kolejki, monitoring workerów      |
+| Skalowanie     | Jedna replika API; długie VLM obciąża ten sam pod      | Wiele workerów, rozłożenie zadań           |
+| Trwałość zadań | Zadanie ginie przy restarcie procesu                   | Kolejka przetrwa restart workera           |
+| Ten projekt    | VLM po uploadzie + **bulk index** (`/index-all`) w tle | Przydatne przy dużym wolumenie i SLA       |
 
 **Wniosek:** Dla zaliczenia i lokalnego K8s BackgroundTasks to świadomy trade-off: prostsze wdrożenie, mniej komponentów. Celery ma sens przy masowym OCR i oddzielnym skalowaniu workerów.
 

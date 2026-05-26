@@ -185,7 +185,7 @@ Wielokrotne `index` na tym samym dokumencie — bez duplikatów (delete przed up
 
 
 
-1. **Dockerfile**, `.dockerignore`, build `ocr-rag-api:latest` — sekcje w README jako szablon
+1. ~~**Dockerfile**, `.dockerignore`, build `ocr-rag-api:latest`**~~ — gotowe (CPU PyTorch + pre-cache MiniLM); README sekcja Docker
 
 2. **Kubernetes** — `k8s/01`–`05`, NodePort 30080, probes na `/health`
 
