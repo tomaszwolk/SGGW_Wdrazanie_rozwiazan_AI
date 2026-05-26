@@ -12,6 +12,8 @@ wheels/
 
 # Files
 .env
+*.tar.gz
+*.tar
 
 # Data
 data/*.db
