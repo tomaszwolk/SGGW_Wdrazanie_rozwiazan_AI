@@ -28,12 +28,13 @@ ocr-rag-api/
 │ ├── upload_validation.py # Walidacja przesłanych plików
 │ └── text_processing.py # Funkcje pomocnicze: chunking, liczenie tokenów, formatowanie Key-Value
 │
-├── k8s/ # Manifesty Kubernetes
+├── k8s/ # Manifesty Kubernetes (ConfigMap/Secret — scripts/deploy-k8s.sh)
 │ ├── 01-namespace.yaml
-│ ├── 02-config.yaml
-│ ├── 03-storage.yaml
-│ ├── 04-qdrant.yaml
-│ └── 05-api.yaml
+│ ├── 02-storage.yaml
+│ ├── 03-qdrant.yaml
+│ └── 04-api.yaml
+├── scripts/
+│ └── deploy-k8s.sh
 │
 ├── docs/ # Pliki planistyczne
 │ ├── prd.md

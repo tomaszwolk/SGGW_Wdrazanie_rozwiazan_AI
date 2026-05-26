@@ -19,18 +19,7 @@ Wszystkie zasoby zostaną wdrożone w dedykowanej przestrzeni nazw (Namespace), 
 
 ## 2. Konfiguracja i Sekrety (Config & Secrets)
 
-- **Plik:** `02-config.yaml`
-- **Zasób 1:** `ConfigMap` (Nazwa: `app-config`)
-  - **Cel:** Przechowywanie jawnych zmiennych środowiskowych.
-  - **Klucze:**
-    - `QDRANT_HOST`: "qdrant-service" (nazwa serwisu wewnątrz K8s)
-    - `QDRANT_PORT`: "6333"
-    - `EMBEDDING_MODEL_NAME`: "sentence-transformers/all-MiniLM-L6-v2"
-    - `LLM_MODEL_NAME`: "gpt-4o-mini" (lub inny z OpenRouter)
-- **Zasób 2:** `Secret` (Nazwa: `app-secrets`)
-  - **Cel:** Bezpieczne przechowywanie kluczy API (kodowane w Base64).
-  - **Klucze:**
-    - `OPENROUTER_API_KEY`: (wartość zakodowana w Base64, znajduje się w .env)
+- **ConfigMap / Secret:** generowane przez `scripts/deploy-k8s.sh` z `.env` (ConfigMap + nadpisania K8s; Secret tylko `OPENROUTER_API_KEY`). Patrz [k8s/README.md](../k8s/README.md).
 
 ---
 
@@ -38,7 +27,7 @@ Wszystkie zasoby zostaną wdrożone w dedykowanej przestrzeni nazw (Namespace), 
 
 Ponieważ kontenery są ulotne (stateless), potrzebujemy wolumenów, aby nie stracić bazy SQLite, wgranych plików i wektorów po restarcie Poda. W Docker Desktop domyślna klasa pamięci (StorageClass) automatycznie przydzieli miejsce na dysku hosta.
 
-- **Plik:** `03-storage.yaml`
+- **Plik:** `02-storage.yaml`
 - **Zasób 1:** `PersistentVolumeClaim` (Nazwa: `sqlite-data-pvc`)
   - **Pojemność:** `1Gi`
   - **Tryb dostępu:** `ReadWriteOnce`
@@ -52,7 +41,7 @@ Ponieważ kontenery są ulotne (stateless), potrzebujemy wolumenów, aby nie str
 
 ## 4. Baza Wektorowa (Qdrant)
 
-- **Plik:** `04-qdrant.yaml`
+- **Plik:** `03-qdrant.yaml`
 - **Zasób 1:** `Deployment` (Nazwa: `qdrant-deployment`)
   - **Obraz:** `qdrant/qdrant:latest`
   - **Replik:** 1
@@ -68,7 +57,7 @@ Ponieważ kontenery są ulotne (stateless), potrzebujemy wolumenów, aby nie str
 
 ## 5. Aplikacja API (FastAPI)
 
-- **Plik:** `05-api.yaml`
+- **Plik:** `04-api.yaml`
 - **Zasób 1:** `Deployment` (Nazwa: `api-deployment`)
   - **Obraz:** `ocr-rag-api:latest` (Obraz zbudowany lokalnie z Dockerfile, polityka `imagePullPolicy: Never` lub `IfNotPresent`).
   - **Replik:** 1
@@ -81,8 +70,8 @@ Ponieważ kontenery są ulotne (stateless), potrzebujemy wolumenów, aby nie str
     - `livenessProbe`: HTTP GET na `/health` (Port 8000). Sprawdza, czy aplikacja nie zawiesiła się.
     - `readinessProbe`: HTTP GET na `/health` (Port 8000). Sprawdza, czy aplikacja jest gotowa przyjmować ruch.
 - **Zasób 2:** `Service` (Nazwa: `api-service`)
-  - **Typ:** `NodePort` (Wystawia API na zewnątrz klastra, aby prowadzący mógł testować w Postmanie/przeglądarce na `localhost`).
-  - **Porty:** Port serwisu `8000` mapowany na port docelowy `8000`. `nodePort` ustawiony sztywno np. na `30080` (Dostęp z hosta przez `http://localhost:30080`).
+  - **Typ:** `LoadBalancer` (Docker Desktop mapuje `localhost:8000` — ten sam port co lokalny dev).
+  - **Porty:** Port serwisu `8000` → `targetPort` `8000`.
 
 ---
 
@@ -90,8 +79,4 @@ Ponieważ kontenery są ulotne (stateless), potrzebujemy wolumenów, aby nie str
 
 W pliku `README.md` znajdzie się instrukcja, aby aplikować manifesty w następującej kolejności (lub użyć jednego połączonego pliku `k8s-all.yaml`):
 
-1. `kubectl apply -f 01-namespace.yaml`
-2. `kubectl apply -f 02-config.yaml`
-3. `kubectl apply -f 03-storage.yaml`
-4. `kubectl apply -f 04-qdrant.yaml`
-5. `kubectl apply -f 05-api.yaml`
+1. `./scripts/deploy-k8s.sh` (zalecane), albo ręcznie: `01` → ConfigMap/Secret ze skryptu → `02`–`04`.

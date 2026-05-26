@@ -1,9 +1,21 @@
-# OCR/VLM RAG API — zaliczenie SGGW
+# OCR/VLM RAG API
 
-REST API (FastAPI): upload skanów faktur → ekstrakcja VLM (OpenRouter) → indeks wektorowy (Qdrant) → wyszukiwanie i odpowiedzi RAG (lokalne embeddingi + LLM).
+Aplikacja zaliczeniowa na przedmiot SGGW Wdrażanie rozwiązań AI.
+Skrócony opis:
 
-**Szczegółowy stan kodu:** [docs/stan-projektu.md](docs/stan-projektu.md)  
-**Plany:** [docs/prd.md](docs/prd.md), [docs/api-plan.md](docs/api-plan.md), [docs/db-plan.md](docs/db-plan.md), [docs/k8s-plan.md](docs/k8s-plan.md)
+- aplikacja REST API (FastAPI)
+- walidacja Pydantic
+- obsługa uploadu plików graficznych .jpg/.jpeg/.png
+- ekstrakcja danych z plików z użyciem VLM (domyślnie GPT-4o-mini poprzez OpenRouter)
+- embedding z użyciem sentence-transformers/all-MiniLM-L6-v2 i zapis do bazy wektorowej Qdrant
+- wyszukiwanie w bazie wektorowej + na podstawie numeru faktury (z użyciem regex) oraz odpowiedzi LLM wraz z podaniem źródeł
+- obsługa statusów HTTP
+- możliwość uruchomienia lokalnie, z użyciem obrazu docker lub Kubernetes
+- wszystkie ustawienia w .env (należy utworzyć na podstawie .env.example)
+- obsługa zadań w tle poprzez BackgroundTasks
+- zbiór faktur testowych: [Invoices donut dataset](https://huggingface.co/datasets/katanaml-org/invoices-donut-data-v1)
+
+Szczegóły architektury, diagramy przepływów, Pydantic i JSON z VLM: **[docs/architektura.md](docs/architektura.md)**.
 
 ---
 
@@ -11,17 +23,8 @@ REST API (FastAPI): upload skanów faktur → ekstrakcja VLM (OpenRouter) → in
 
 - Python 3.12+, [uv](https://docs.astral.sh/uv/)
 - Działający **Qdrant** (lokalnie, np. Docker: `docker run -p 6333:6333 qdrant/qdrant`)
-- Klucz **OpenRouter** w `.env` (VLM + LLM)
-- Do wdrożenia K8s: Docker Desktop z Kubernetes, `kubectl`
-
-### Wybór modeli OpenRouter (testy)
-
-| Rola                                | Zmienna `.env`   | Model                        | Uzasadnienie                                                                                                               |
-| ----------------------------------- | ---------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| **VLM** (OCR / ekstrakcja z obrazu) | `VLM_MODEL_NAME` | `openai/gpt-4o-mini`         | Tańsze modele w testach nie odczytywały wszystkich pól ze skanów faktur.                                                   |
-| **LLM** (odpowiedzi RAG)            | `LLM_MODEL_NAME` | `deepseek/deepseek-v4-flash` | Wystarczający do Q&A na kontekście z chunków; niski koszt. Darmowe modele na OpenRouter często były przeciążone (**503**). |
-
-Wartości ustawiasz w `.env` (wzór: [.env.example](.env.example)).
+- Klucz **OpenRouter** w `.env` (VLM + LLM) — wzór: [.env.example](.env.example); modele: [architektura.md — Modele OpenRouter](docs/architektura.md#modele-openrouter)
+- **Kubernetes (ocena 5+):** Docker Desktop z włączonym K8s, `kubectl` — patrz sekcja [Kubernetes](#kubernetes-docker-desktop)
 
 ---
 
@@ -32,6 +35,7 @@ cp .env.example .env
 # uzupełnij OPENROUTER_API_KEY
 
 uv sync
+# baza Qdrant musi być najpierw uruchomiona
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
@@ -53,75 +57,41 @@ W K8s ścieżki danych to `/app/data` (PVC); lokalnie domyślnie `./data/` (SQLi
 | `POST` | `/rag/search`                    | Wyszukiwanie semantyczne                   |
 | `POST` | `/rag/answer`                    | RAG + LLM (OpenRouter)                     |
 
-### Przepływ wywołań (diagram)
+### Statusy dokumentu (`GET /documents/{document_id}`)
 
-Poniżej: które **funkcje** (pliki w `app/`) są wywoływane po trafieniu w dany endpoint. Strzałki `-.->` = zadanie w tle (`BackgroundTasks`).
+| Status | Znaczenie |
+| --- | --- |
+| `queued` | Plik przyjęty, VLM w kolejce (BackgroundTasks) |
+| `processing` | Trwa ekstrakcja VLM |
+| `completed` | `raw_text` + `structured_data` dostępne w odpowiedzi |
+| `failed` | Błąd VLM — pole `error_message` |
+
+### Kody HTTP (wybrane)
+
+| Kod | Kiedy |
+| --- | --- |
+| **200** | Poprawne GET, index, search, answer; health OK; `index-all` bez dokumentów `completed` |
+| **202** | Upload przyjęty; `index-all` zakolejkowany |
+| **400** | Zły plik uploadu (format, rozmiar) |
+| **404** | Brak `document_id` |
+| **409** | Indeks przed zakończeniem VLM (`status` ≠ `completed`) |
+| **422** | Niepoprawne body (Pydantic), puste `question` w `/rag/answer` |
+| **500** | Błąd VLM/index/search/answer; health gdy SQLite lub Qdrant niedostępne |
+
+### Architektura (skrót)
 
 ```mermaid
-flowchart TB
-  subgraph START["Startup — lifespan (main.py)"]
-    direction TB
-    S1[init_db] --> S2["SentenceTransformer → app.state.embedder"]
-    S2 --> S3["get_qdrant_client → app.state.qdrant_client"]
-    S3 --> S4[ensure_collection]
-  end
-
-  subgraph HEALTH["GET /health — health.py"]
-    H1[check_sqlite] --> H2[health_check_qdrant]
-    H2 --> H3[HealthResponse]
-  end
-
-  subgraph UPLOAD["POST /documents/upload — documents.py"]
-    U1[validate_upload_file] --> U2["SQLite: Document status=queued"]
-    U2 -.-> U3[process_document_vlm]
-    U3 --> U4[extract_structured_data — vlm_service]
-    U4 --> U5["SQLite: raw_text, structured_data, status=completed"]
-    U5 --> U6[usunięcie pliku z UPLOAD_DIR]
-  end
-
-  subgraph GETDOC["GET /documents/{id} — documents.py"]
-    G1[get_document] --> G2["StructuredData.model_validate_json"]
-    G2 --> G3[DocumentDetailResponse]
-  end
-
-  subgraph INDEX1["POST /documents/{id}/index — documents.py"]
-    I1[index_document — rag_service] --> I2[build_chunks — text_processing]
-    I2 --> I3[delete_by_document_id — qdrant]
-    I3 --> I4["embedder.encode → upsert_chunks"]
-  end
-
-  subgraph INDEXALL["POST /documents/index-all — documents.py"]
-    A1[list_completed_document_ids] -.-> A2[process_index_all_documents]
-    A2 --> A3[index_all_completed_documents]
-    A3 --> I1
-  end
-
-  subgraph SEARCH["POST /rag/search — rag.py"]
-    R0[_resolve_top_k] --> R1[hybrid_search]
-    R1 --> R2[search_documents]
-    R2 --> R2a["embedder.encode → search_vectors — qdrant"]
-    R1 --> R3[extract_invoice_number_candidates — query_parsing]
-    R3 --> R4["find_completed_documents_for_invoice_candidates — sqlite"]
-    R4 --> R5[_document_to_sql_search_result]
-    R2 --> R6[merge vector + sql hits]
-    R5 --> R6
-    R6 --> R7[enrich_search_results_with_sqlite]
-    R7 --> R8[SearchResponse]
-  end
-
-  subgraph ANSWER["POST /rag/answer — rag.py"]
-    Q0[_resolve_top_k] --> Q1[hybrid_search]
-    Q1 --> Q7[enrich_search_results_with_sqlite]
-    Q7 --> Q8{wyniki puste?}
-    Q8 -->|tak| Q9["No information available"]
-    Q8 -->|nie| Q10[answer_question]
-    Q10 --> Q11[_format_answer_context]
-    Q11 --> Q12["OpenRouter chat.completions — LLM_MODEL_NAME"]
-    Q12 --> Q13[AnswerResponse + sources]
-  end
+flowchart LR
+  IMG["Obraz"] --> UP["POST /upload"]
+  UP -.-> VLM["VLM"]
+  VLM --> SQL[("SQLite")]
+  SQL --> IDX["POST /index"]
+  IDX --> QD[("Qdrant")]
+  QD --> RAG["/rag/search · /answer"]
+  RAG --> LLM["LLM"]
 ```
 
-Skrót warstw: **router** (`app/api/*`) → **serwisy** (`vlm_service`, `rag_service`, `background_tasks`) → **bazy** (`sqlite`, `qdrant`) + lokalny **embedder** w `app.state`.
+Diagramy warstw, upload, indeks i RAG (osobne, czytelne schematy): **[docs/architektura.md](docs/architektura.md)**.
 
 ### Scenariusz testowy (E2E) — jedna faktura
 
@@ -130,6 +100,15 @@ Skrót warstw: **router** (`app/api/*`) → **serwisy** (`vlm_service`, `rag_ser
 3. `POST /documents/{document_id}/index` — wektory w Qdrant (200, `chunks_indexed`)
 4. `POST /rag/search` — body: `{"query": "..."}` (opcjonalnie `"top_k"`; bez niego lub `"top_k": 0` → `RAG_DEFAULT_TOP_K` z `.env`, np. `6`)
 5. `POST /rag/answer` — body: `{"question": "..."}` (opcjonalnie `"top_k"`; jak wyżej)
+
+**Przykładowe zapytania** (po angielsku — faktury testowe z datasetu są angielskie; pytania po polsku też działają):
+
+| `/rag/search` — `query` | `/rag/answer` — `question` |
+| --- | --- |
+| `Who is the seller?` | `What is the invoice number?` |
+| `total gross amount` | `What is the total gross amount?` |
+| `invoice INV-2024-001` | `List products on this invoice` |
+| `buyer name` | `What is the VAT amount?` |
 
 ### Wiele faktur (bez ręcznego `document_id`)
 
@@ -203,29 +182,102 @@ docker run --rm -p 8000:8000 \
 
 Przy pierwszym starcie kontenera inicjalizacja kolekcji Qdrant i embeddera może zająć **1–2 min** (probe w Dockerfile ma `start-period=180s`).
 
+### Dockerfile, warstwy i `.dockerignore`
+
+Wymagania zaliczeniowe — krótko, w kontekście tego repozytorium:
+
+| Pojęcie | W tym projekcie |
+| --- | --- |
+| **Dockerfile** | Multi-stage: builder (`uv sync`, pre-cache MiniLM, CPU-only PyTorch) → runtime (`python:3.12-slim`, tylko `/app`) |
+| **`.dockerignore`** | Wyklucza m.in. `.venv`, `data/`, `docs/`, `k8s/`, `.env`, `.git` — mniejszy **context**, szybszy build, brak sekretów w obrazie |
+| **Context** | Katalog z Dockerfile; do demona trafia tylko to, co nie jest w `.dockerignore` |
+| **Warstwy / cache** | Najpierw `pyproject.toml` + `uv.lock` + `uv sync`, potem `COPY app` — zmiana kodu nie przebudowuje PyTorch |
+| **Kolejność instrukcji** | Zależności przed kodem aplikacji → cache przy codziennych zmianach w `app/` |
+
+### Pytania teoretyczne — Docker (rozszerzenie)
+
+**Dockerfile** — instrukcje budowy niezmiennego obrazu (`FROM`, `RUN`, `COPY`, `CMD`). `docker build` wykonuje kroki warstwa po warstwie.
+
+**`.dockerignore`** — jak `.gitignore` dla wysyłanego kontekstu buildu.
+
+**Docker context** — pliki przekazane daemonowi; tylko one mogą wejść do `COPY`.
+
+**Warstwy** — każdy krok Dockerfile = cache’owana warstwa; zmiana wcześniejszej unieważnia późniejsze.
+
+**Optymalizacja** — rzadkie kroki na górę, `.dockerignore`, multi-stage, łączenie `RUN` tam, gdzie sensowne.
+
+**Kolejność instrukcji** — przy zmianie tylko kodu nie przebudowujesz instalacji zależności.
+
 ---
 
-## Kubernetes (do uzupełnienia po dodaniu `k8s/`)
+## Kubernetes (Docker Desktop)
 
-> Manifesty wg [docs/k8s-plan.md](docs/k8s-plan.md), namespace `ai-rag-app`.
+Wariant **wdrożeniowy na ocenę 5+** (obok wymaganego Dockera): osobne deploymenty API i Qdrant, manifesty YAML, ConfigMap/Secret z `.env`, health checki, opis uruchomienia lokalnego klastra.
 
-Kolejność:
+Manifesty: `k8s/01`–`04`, skrypt [`scripts/deploy-k8s.sh`](scripts/deploy-k8s.sh), namespace **`ai-rag-app`**. Skrót plików: [k8s/README.md](k8s/README.md).
+
+### Wymagania
+
+- Kubernetes w Docker Desktop, `kubectl`, `docker`, plik **`.env`** (jak do dev — ten sam plik).
+- Orientacyjnie **~4 GB wolnego RAM** (API + Qdrant + embedder). Brak sztywnych `resources.limits` w YAML.
+
+### Jedna komenda (zalecane)
 
 ```bash
-kubectl apply -f k8s/01-namespace.yaml
-kubectl apply -f k8s/02-config.yaml
-kubectl apply -f k8s/03-storage.yaml
-kubectl apply -f k8s/04-qdrant.yaml
-kubectl apply -f k8s/05-api.yaml
+chmod +x scripts/deploy-k8s.sh   # raz, Git Bash / Linux / macOS
+./scripts/deploy-k8s.sh
 ```
 
-API z hosta (Docker Desktop): http://localhost:30080/health
+Skrypt:
 
-Secret `OPENROUTER_API_KEY` — w manifeście Base64 lub `kubectl create secret` (nie commituj prawdziwego klucza).
+1. Tworzy **ConfigMap** z `.env` (wszystko oprócz `OPENROUTER_API_KEY`) z nadpisaniem na K8s: `QDRANT_HOST=qdrant-service`, `SQLITE_PATH=/app/data/app.db`, `UPLOAD_DIR=/app/data/uploads`.
+2. Tworzy **Secret** tylko z `OPENROUTER_API_KEY`.
+3. Stosuje manifesty i czeka na rollout.
+4. Domyślnie używa obrazu **[`tomaszwolk/ocr-rag-api:latest`](https://hub.docker.com/r/tomaszwolk/ocr-rag-api)** (`imagePullPolicy: IfNotPresent` — pobranie z Hub, gdy brak obrazu na węźle).
+
+**Zmiana modelu VLM/LLM w `.env`** → ponownie `./scripts/deploy-k8s.sh` (odświeży ConfigMap i zrestartuje API).
+
+| Flaga     | Działanie                                                                     |
+| --------- | ----------------------------------------------------------------------------- |
+| _(brak)_  | Obraz z Docker Hub                                                            |
+| `--local` | `docker build` (jeśli brak obrazu), import do węzła K8s, `ocr-rag-api:latest` |
+| `--build` | Jak `--local`, zawsze przebudowuje obraz                                      |
+
+### Dostęp z hosta
+
+Service typu **LoadBalancer** na porcie **8000** (ten sam co lokalny `uvicorn` / `docker run -p 8000:8000`). Docker Desktop mapuje to na `http://localhost:8000`.
+
+| URL                          | Opis            |
+| ---------------------------- | --------------- |
+| http://localhost:8000/health | SQLite + Qdrant |
+| http://localhost:8000/docs   | Swagger         |
+
+Pierwszy start API: **2–4 min** (startupProbe, ładowanie embeddera).
+
+```bash
+kubectl get pods -n ai-rag-app -w
+kubectl logs -n ai-rag-app -l app=api -f
+```
+
+### Test E2E w klastrze
+
+Upload → `completed` → index → search/answer pod `http://localhost:8000`.
+
+**Uwaga:** restart poda API przerywa `BackgroundTasks` (VLM, `/index-all`). Dane w klastrze są na **PVC**.
+
+### Rozwiązywanie problemów
+
+| Objaw                            | Co zrobić                                                              |
+| -------------------------------- | ---------------------------------------------------------------------- |
+| `ImagePullBackOff` / brak obrazu | Hub: sprawdź sieć; lokalnie: `./scripts/deploy-k8s.sh --local --build` |
+| API nie `Ready`                  | Poczekaj do ~4 min; `kubectl logs -n ai-rag-app -l app=api`            |
+| Stara konfiguracja w podzie      | Ponów `./scripts/deploy-k8s.sh` po edycji `.env`                       |
 
 ---
 
-## Dlaczego `BackgroundTasks`, a nie Celery/Redis?
+## Decyzje projektowe
+
+### Dlaczego `BackgroundTasks`, a nie Celery/Redis?
 
 |                | **FastAPI BackgroundTasks**                            | **Celery + Redis**                         |
 | -------------- | ------------------------------------------------------ | ------------------------------------------ |
@@ -238,10 +290,6 @@ Secret `OPENROUTER_API_KEY` — w manifeście Base64 lub `kubectl create secret`
 **Wniosek:** Dla zaliczenia i lokalnego K8s BackgroundTasks to świadomy trade-off: prostsze wdrożenie, mniej komponentów. Celery ma sens przy masowym OCR i oddzielnym skalowaniu workerów.
 
 Bulk index **nie** woła w pętli wewnętrznego HTTP — ten sam kod co `/{document_id}/index` (`index_document()`), lista ID przekazana z routera do taska (jedno zapytanie do SQLite).
-
----
-
-## Decyzje projektowe (pamiętaj przy obronie / rozwoju)
 
 ### Język promptów i chunków
 
@@ -266,11 +314,9 @@ Przed każdym indeksem pojedynczego dokumentu: **`delete_by_document_id`**, pote
 - **Items** — jeden produkt = jeden sformatowany blok; łączenie w chunki do limitu `CHUNK_MAX_TOKENS`; brak cięcia w środku produktu.
 - W tekście chunka **pomijamy pola `None`** (nie wstawiamy `"None"` do embeddingów).
 
-### Pola faktury
+### Dane strukturalne z VLM
 
-- W JSON z VLM: **`invoice_no`** (nie mylić z nazwą pliku).
-- **`Document.filename`** w SQLite = nazwa z uploadu; to samo w payloadzie Qdrant jako **`filename`**.
-- Pozycje: **`total_line_net`**, **`total_line_gross`**.
+Kształt JSON (`StructuredData`), przykład i mapowanie pól: **[docs/architektura.md — JSON strukturalny](docs/architektura.md#json-strukturalny-vlm--sqlite)**. Walidacja Pydantic: **[architektura — Pydantic](docs/architektura.md#pydantic--główne-modele)**.
 
 ### RAG `/search` i `/answer`
 
@@ -284,10 +330,15 @@ Przed każdym indeksem pojedynczego dokumentu: **`delete_by_document_id`**, pote
 - Kontekst LLM: **`_format_answer_context()`** — każdy hit dostarcza chunk (`source_text`); pełny JSON dokumentu tylko przy hicie z **najwyższym `score`** dla danego `document_id` (bez powtórzeń w prompcie).
 - Brak wyników search → odpowiedź `"No information available"` **bez** wywołania LLM.
 
+### Ograniczenia RAG
+
+System **nie** wykonuje agregacji po całej bazie (np. *„która faktura ma najwyższą kwotę brutto?”* wśród wszystkich dokumentów). `/rag/search` i `/rag/answer` opierają się na **top‑k** fragmentach z Qdrant (+ opcjonalnie dopasowanie po **numerze faktury** w SQLite). Pytania wymagające globalnego porównania wszystkich faktur wymagałyby osobnej warstwy (SQL/analityka), poza scope tego API.
+
 ### VLM i LLM (OpenRouter)
 
-- **VLM:** `extract_structured_data()` → model z `VLM_MODEL_NAME` (rekomendacja: **`openai/gpt-4o-mini`**).
-- **LLM:** `answer_question()` → model z `LLM_MODEL_NAME` (rekomendacja: **`deepseek/deepseek-v4-flash`**).
+- Modele: tabela w [docs/architektura.md](docs/architektura.md#modele-openrouter).
+- **VLM:** `extract_structured_data()` → `VLM_MODEL_NAME`.
+- **LLM:** `answer_question()` → `LLM_MODEL_NAME`.
 - Retry (`tenacity`) na błędy sieciowe / rate limit — **nie** ponawiać `400` (zły schema/model).
 - `response_format` bez `strict` tam, gdzie provider odrzuca schema.
 - Po sukcesie VLM — **usunięcie pliku obrazu** z dysku.
@@ -296,38 +347,6 @@ Przed każdym indeksem pojedynczego dokumentu: **`delete_by_document_id`**, pote
 
 - Embedder (`SentenceTransformer`) i klient Qdrant — **`app.state`** w `lifespan`, używane w routerach przez `Request`.
 - Qdrant search: **`query_points`** (nowsze API klienta), nie przestarzałe `search()`.
-
----
-
-## Pytania teoretyczne — Docker (wymaganie zaliczenia)
-
-### Czym jest Dockerfile?
-
-Plik tekstowy z instrukcjami budowy **obrazu** kontenera (bazowy obraz, instalacja zależności, kopiowanie kodu, `CMD`/`ENTRYPOINT`). `docker build` wykonuje te kroki i tworzy niezmienną „matrycę” do uruchamiania kontenerów.
-
-### Czym jest `.dockerignore`?
-
-Odpowiednik `.gitignore` dla **kontekstu buildu** — pliki/katalogi nie trafiają do demona Dockera przy `docker build`. Mniejszy kontekst = szybszy build i brak sekretów / `.venv` w obrazie.
-
-### Czym jest docker context?
-
-Zestaw plików wysyłanych do Dockera podczas buildu (zwykle katalog z Dockerfile + `.dockerignore`). Tylko to, co w kontekście, może być skopiowane instrukcją `COPY`.
-
-### Jak działają warstwy obrazu (image layers)?
-
-Każda instrukcja Dockerfile (RUN, COPY, …) tworzy **warstwę** (cache’owaną). Warstwy są tylko do odczytu i współdzielone między obrazami. Zmiana wczesnej warstwy unieważnia cache późniejszych kroków.
-
-### Jak zoptymalizować czas budowy obrazu?
-
-- Rzadko zmieniane kroki **na górę** (baza, `uv sync` / instalacja zależności).
-- Kod aplikacji **`COPY` na dół**.
-- `.dockerignore` (bez `.venv`, `docs`, `.git`).
-- Łączenie RUN w jedną warstwę tam, gdzie ma sens.
-- Multi-stage build (build deps vs runtime) — mniejszy finalny obraz.
-
-### Dlaczego kolejność instrukcji w Dockerfile ma znaczenie?
-
-Bo **cache warstw** — jeśli zmienisz plik źródłowy, warstwa `COPY` i wszystko po niej buduje się od nowa. Gdy zależności są zainstalowane wcześniej, przy zmianie tylko kodu nie pobierasz ponownie całego PyTorch/sentence-transformers.
 
 ---
 
@@ -342,15 +361,9 @@ app/
   models/       domain, schemas
   core/         config
 data/           SQLite, uploady (lokalnie; PVC w K8s)
-docs/           plany i stan-projektu.md
-k8s/            (do dodania) manifesty YAML
+docs/           architektura.md (+ notatki wewnętrzne)
+k8s/            manifesty YAML (01–04)
+scripts/        deploy-k8s.sh
 ```
 
 ---
-
-## Co jeszcze zrobić przed oddaniem
-
-- [x] API dokumentów + RAG (`/index-all` w tym)
-- [ ] `Dockerfile` + `.dockerignore` → uzupełnij sekcję Docker powyżej
-- [ ] `k8s/01`–`05` → uzupełnij sekcję Kubernetes
-- [ ] Test na klastrze: `http://localhost:30080/health` + flow E2E (upload × N → `index-all` → search/answer)

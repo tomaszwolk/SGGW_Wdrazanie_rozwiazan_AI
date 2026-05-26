@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-deployment
+  namespace: ai-rag-app
+  labels:
+    app.kubernetes.io/name: ocr-rag-api
+    app.kubernetes.io/component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: tomaszwolk/ocr-rag-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          envFrom:
+            - secretRef:
+                name: app-secrets
+                optional: false
+            - configMapRef:
+                name: app-config
+          volumeMounts:
+            - name: sqlite-data
+              mountPath: /app/data
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: sqlite-data
+          persistentVolumeClaim:
+            claimName: sqlite-data-pvc
+---
+# LoadBalancer: Docker Desktop mapuje localhost:8000 (jak lokalny docker run -p 8000:8000).
+# NodePort 8000 jest poza domyślnym zakresem K8s (30000–32767); NodePort 30080 często nie działa na Windows.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-service
+  namespace: ai-rag-app
+  labels:
+    app.kubernetes.io/name: ocr-rag-api
+    app.kubernetes.io/component: api
+spec:
+  type: LoadBalancer
+  selector:
+    app: api
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
